@@ -1,43 +1,71 @@
 /* Wells & Meters Field Report — app logic
-   Data model: BASE_WELLS / BASE_METERS come from data.js (the original spreadsheet).
-   Anything added via the "Add New" form is merged in and saved to localStorage,
-   so it's still there next time this site is opened in the same browser. */
+   Data model:
+   - BASE_WELLS / BASE_METERS (from data.js) = the original spreadsheet, never mutated.
+   - "edits" = field overrides keyed by ID/Serial, applied on top of base rows.
+   - "deletes" = list of base IDs/Serials hidden from view.
+   - "added" = brand new rows created via the Add New tab (can be edited/removed directly).
+   Everything beyond the base data lives in localStorage, so it persists in this browser. */
 
 (function () {
   "use strict";
 
-  const LS_WELLS = "wam_added_wells";
-  const LS_METERS = "wam_added_meters";
+  const LS = {
+    addedWells: "wam_added_wells",
+    addedMeters: "wam_added_meters",
+    wellEdits: "wam_well_edits",
+    meterEdits: "wam_meter_edits",
+    wellDeletes: "wam_well_deletes",
+    meterDeletes: "wam_meter_deletes",
+  };
 
-  function safeGet(key) {
+  function safeGet(key, fallback) {
     try {
       const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : [];
+      return raw ? JSON.parse(raw) : fallback;
     } catch (e) {
-      return [];
+      return fallback;
     }
   }
   function safeSet(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-      return true;
-    } catch (e) {
-      return false;
-    }
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch (e) { return false; }
   }
 
-  let addedWells = safeGet(LS_WELLS);
-  let addedMeters = safeGet(LS_METERS);
+  let addedWells = safeGet(LS.addedWells, []);
+  let addedMeters = safeGet(LS.addedMeters, []);
+  let wellEdits = safeGet(LS.wellEdits, {});     // { [ID]: {field: value, ...} }
+  let meterEdits = safeGet(LS.meterEdits, {});   // { [Serial]: {field: value, ...} }
+  let wellDeletes = new Set(safeGet(LS.wellDeletes, []));
+  let meterDeletes = new Set(safeGet(LS.meterDeletes, []));
 
-  function allWells() { return BASE_WELLS.concat(addedWells); }
-  function allMeters() { return BASE_METERS.concat(addedMeters); }
+  function persistWells() { safeSet(LS.addedWells, addedWells); }
+  function persistMeters() { safeSet(LS.addedMeters, addedMeters); }
+  function persistWellEdits() { safeSet(LS.wellEdits, wellEdits); }
+  function persistMeterEdits() { safeSet(LS.meterEdits, meterEdits); }
+  function persistWellDeletes() { safeSet(LS.wellDeletes, Array.from(wellDeletes)); }
+  function persistMeterDeletes() { safeSet(LS.meterDeletes, Array.from(meterDeletes)); }
 
+  function norm(s) { return (s || "").toString().trim().toLowerCase(); }
   function pad3(id) {
     const s = String(id);
     return /^\d+$/.test(s) ? s.padStart(3, "0") : s;
   }
 
-  function norm(s) { return (s || "").toString().trim().toLowerCase(); }
+  // Effective datasets: base (with edits applied, deletes removed) + added rows
+  function effectiveWells() {
+    const base = BASE_WELLS
+      .filter(w => !wellDeletes.has(String(w.ID)))
+      .map(w => wellEdits[String(w.ID)] ? Object.assign({}, w, wellEdits[String(w.ID)]) : w);
+    return base.concat(addedWells);
+  }
+  function effectiveMeters() {
+    const base = BASE_METERS
+      .filter(m => !meterDeletes.has(m.Serial))
+      .map(m => meterEdits[m.Serial] ? Object.assign({}, m, meterEdits[m.Serial]) : m);
+    return base.concat(addedMeters);
+  }
+  function isAddedWell(id) { return addedWells.some(w => String(w.ID) === String(id)); }
+  function isAddedMeter(serial) { return addedMeters.some(m => m.Serial === serial); }
 
   // ---------------- Toast ----------------
   let toastTimer;
@@ -62,8 +90,8 @@
 
   // ---------------- Dashboard stats ----------------
   function renderStats() {
-    const wells = allWells();
-    const meters = allMeters();
+    const wells = effectiveWells();
+    const meters = effectiveMeters();
     const activeWells = wells.filter(w => norm(w.Status) === "active").length;
     const nonActiveWells = wells.length - activeWells;
     const workingMeters = meters.filter(m => norm(m.Status).startsWith("working")).length;
@@ -97,7 +125,7 @@
   function renderMap() {
     markerLayer.clearLayers();
     const pts = [];
-    allWells().forEach(w => {
+    effectiveWells().forEach(w => {
       const lat = parseFloat(w.Lat), lng = parseFloat(w.Lng);
       if (isNaN(lat) || isNaN(lng)) return;
       const active = norm(w.Status) === "active";
@@ -119,11 +147,38 @@
     else map.setView([26.64, 37.91], 12);
   }
 
+  // ---------------- Field definitions (shared by Add form + Edit modal) ----------------
+  const WELL_FIELDS = [
+    { name: "ID", label: "Well ID", type: "text" },
+    { name: "Lat", label: "Latitude", type: "number" },
+    { name: "Lng", label: "Longitude", type: "number" },
+    { name: "Status", label: "Well Status", type: "select", options: ["Active", "Non-Active"] },
+    { name: "Rehab", label: "Rehabilitation Status", type: "select", options: ["Maintained", "Not Maintained"] },
+    { name: "DistToMeter", label: "Distance to Meter (m)", type: "number" },
+    { name: "TotalDepth", label: "Total Depth (m)", type: "number" },
+    { name: "AmountWater", label: "Amount of Water (m)", type: "number" },
+    { name: "DisconnectReason", label: "Disconnect Reason", type: "text" },
+    { name: "ConnectedMeter", label: "Connected Meter Serial", type: "text" },
+  ];
+  const METER_FIELDS = [
+    { name: "Serial", label: "Meter Serial Number", type: "text" },
+    { name: "Status", label: "Status", type: "select", options: ["Working", "Not working"] },
+    { name: "InputV", label: "Input Voltage", type: "number" },
+    { name: "OutputV", label: "Output Voltage", type: "number" },
+    { name: "Amperes", label: "Amperes", type: "number" },
+    { name: "Breaker", label: "Breaker Capacity", type: "number" },
+    { name: "ConnectedWell", label: "Connected Well No.", type: "text" },
+    { name: "DisconnectReason", label: "Disconnect Reason", type: "text" },
+  ];
+  const WELL_NUMERIC = ["Lat", "Lng", "DistToMeter", "TotalDepth", "AmountWater"];
+  const METER_NUMERIC = ["InputV", "OutputV", "Amperes", "Breaker"];
+
   // ---------------- Wells table ----------------
-  function wellRowHtml(w, isAdded) {
+  function wellRowHtml(w) {
+    const added = isAddedWell(w.ID);
     const active = norm(w.Status) === "active";
     const maintained = norm(w.Rehab) === "maintained";
-    return `<tr class="${isAdded ? "new-row" : ""}" data-id="${w.ID}">
+    return `<tr class="${added ? "new-row" : ""}" data-id="${w.ID}">
       <td class="mono">${pad3(w.ID)}</td>
       <td><span class="badge ${active ? "on" : "off"}">${w.Status || "—"}</span></td>
       <td><span class="badge ${maintained ? "on" : "amber"}">${w.Rehab || "—"}</span></td>
@@ -134,7 +189,10 @@
       <td>${w.AmountWater ?? "—"}</td>
       <td>${w.DisconnectReason ?? "—"}</td>
       <td class="mono">${w.ConnectedMeter ?? "—"}</td>
-      <td>${isAdded ? `<button class="btn danger" data-del-well="${w.ID}">Remove</button>` : ""}</td>
+      <td class="row-actions">
+        <button class="btn edit" data-edit-well="${w.ID}">Edit</button>
+        <button class="btn danger" data-del-well="${w.ID}">Remove</button>
+      </td>
     </tr>`;
   }
 
@@ -143,18 +201,16 @@
     const statusF = document.getElementById("wellStatusFilter").value;
     const rehabF = document.getElementById("wellRehabFilter").value;
 
-    const addedIds = new Set(addedWells.map(w => String(w.ID)));
-    let rows = allWells().filter(w => {
+    let rows = effectiveWells().filter(w => {
       if (statusF && w.Status !== statusF) return false;
       if (rehabF && w.Rehab !== rehabF) return false;
       if (q && !(norm(pad3(w.ID)).includes(q) || norm(w.ConnectedMeter).includes(q))) return false;
       return true;
     });
 
-    document.getElementById("wellsBody").innerHTML = rows.map(w =>
-      wellRowHtml(w, addedIds.has(String(w.ID)))
-    ).join("") || `<tr><td colspan="11" class="muted" style="text-align:center;padding:24px;">No wells match these filters.</td></tr>`;
-    document.getElementById("wellCount").textContent = `${rows.length} / ${allWells().length} wells`;
+    document.getElementById("wellsBody").innerHTML = rows.map(wellRowHtml).join("") ||
+      `<tr><td colspan="11" class="muted" style="text-align:center;padding:24px;">No wells match these filters.</td></tr>`;
+    document.getElementById("wellCount").textContent = `${rows.length} / ${effectiveWells().length} wells`;
   }
 
   document.getElementById("wellSearch").addEventListener("input", renderWells);
@@ -162,19 +218,25 @@
   document.getElementById("wellRehabFilter").addEventListener("change", renderWells);
 
   document.getElementById("wellsBody").addEventListener("click", e => {
-    const btn = e.target.closest("[data-del-well]");
-    if (!btn) return;
-    const id = btn.dataset.delWell;
-    addedWells = addedWells.filter(w => String(w.ID) !== id);
-    safeSet(LS_WELLS, addedWells);
-    renderWells(); renderStats(); renderMap();
-    toast("Well removed.");
+    const delBtn = e.target.closest("[data-del-well]");
+    if (delBtn) {
+      const id = delBtn.dataset.delWell;
+      if (!confirm(`Remove well ${pad3(id)}? This can't be undone (but isn't billed against the spreadsheet — you can re-add it).`)) return;
+      if (isAddedWell(id)) { addedWells = addedWells.filter(w => String(w.ID) !== String(id)); persistWells(); }
+      else { wellDeletes.add(String(id)); persistWellDeletes(); }
+      renderWells(); renderStats(); renderMap();
+      toast("Well removed.");
+      return;
+    }
+    const editBtn = e.target.closest("[data-edit-well]");
+    if (editBtn) openEditModal("well", editBtn.dataset.editWell);
   });
 
   // ---------------- Meters table ----------------
-  function meterRowHtml(m, isAdded) {
+  function meterRowHtml(m) {
+    const added = isAddedMeter(m.Serial);
     const working = norm(m.Status).startsWith("working");
-    return `<tr class="${isAdded ? "new-row" : ""}" data-serial="${m.Serial}">
+    return `<tr class="${added ? "new-row" : ""}" data-serial="${m.Serial}">
       <td class="mono">${m.Serial}</td>
       <td><span class="badge ${working ? "on" : "off"}">${(m.Status || "—").trim()}</span></td>
       <td>${m.InputV ?? "—"}</td>
@@ -183,7 +245,10 @@
       <td>${m.Breaker ?? "—"}</td>
       <td class="mono">${m.ConnectedWell ?? "—"}</td>
       <td>${m.DisconnectReason ?? "—"}</td>
-      <td>${isAdded ? `<button class="btn danger" data-del-meter="${m.Serial}">Remove</button>` : ""}</td>
+      <td class="row-actions">
+        <button class="btn edit" data-edit-meter="${m.Serial}">Edit</button>
+        <button class="btn danger" data-del-meter="${m.Serial}">Remove</button>
+      </td>
     </tr>`;
   }
 
@@ -191,30 +256,33 @@
     const q = norm(document.getElementById("meterSearch").value);
     const statusF = norm(document.getElementById("meterStatusFilter").value);
 
-    const addedSerials = new Set(addedMeters.map(m => m.Serial));
-    let rows = allMeters().filter(m => {
+    let rows = effectiveMeters().filter(m => {
       if (statusF && !norm(m.Status).startsWith(statusF)) return false;
       if (q && !(norm(m.Serial).includes(q) || norm(m.ConnectedWell).includes(q))) return false;
       return true;
     });
 
-    document.getElementById("metersBody").innerHTML = rows.map(m =>
-      meterRowHtml(m, addedSerials.has(m.Serial))
-    ).join("") || `<tr><td colspan="9" class="muted" style="text-align:center;padding:24px;">No meters match these filters.</td></tr>`;
-    document.getElementById("meterCount").textContent = `${rows.length} / ${allMeters().length} meters`;
+    document.getElementById("metersBody").innerHTML = rows.map(meterRowHtml).join("") ||
+      `<tr><td colspan="9" class="muted" style="text-align:center;padding:24px;">No meters match these filters.</td></tr>`;
+    document.getElementById("meterCount").textContent = `${rows.length} / ${effectiveMeters().length} meters`;
   }
 
   document.getElementById("meterSearch").addEventListener("input", renderMeters);
   document.getElementById("meterStatusFilter").addEventListener("change", renderMeters);
 
   document.getElementById("metersBody").addEventListener("click", e => {
-    const btn = e.target.closest("[data-del-meter]");
-    if (!btn) return;
-    const serial = btn.dataset.delMeter;
-    addedMeters = addedMeters.filter(m => m.Serial !== serial);
-    safeSet(LS_METERS, addedMeters);
-    renderMeters(); renderStats();
-    toast("Meter removed.");
+    const delBtn = e.target.closest("[data-del-meter]");
+    if (delBtn) {
+      const serial = delBtn.dataset.delMeter;
+      if (!confirm(`Remove meter ${serial}? This can't be undone.`)) return;
+      if (isAddedMeter(serial)) { addedMeters = addedMeters.filter(m => m.Serial !== serial); persistMeters(); }
+      else { meterDeletes.add(serial); persistMeterDeletes(); }
+      renderMeters(); renderStats();
+      toast("Meter removed.");
+      return;
+    }
+    const editBtn = e.target.closest("[data-edit-meter]");
+    if (editBtn) openEditModal("meter", editBtn.dataset.editMeter);
   });
 
   // ---------------- Add New form ----------------
@@ -238,12 +306,12 @@
 
   document.getElementById("wellForm").addEventListener("submit", e => {
     e.preventDefault();
-    const obj = formToObject(e.target, ["Lat", "Lng", "DistToMeter", "TotalDepth", "AmountWater"]);
+    const obj = formToObject(e.target, WELL_NUMERIC);
     if (!obj.ID) { toast("Well ID is required."); return; }
-    const exists = allWells().some(w => String(w.ID) === String(obj.ID));
+    const exists = effectiveWells().some(w => String(w.ID) === String(obj.ID));
     if (exists) { document.getElementById("wellFormMsg").textContent = "A well with that ID already exists."; return; }
     addedWells.push(obj);
-    safeSet(LS_WELLS, addedWells);
+    persistWells();
     e.target.reset();
     document.getElementById("wellFormMsg").textContent = "";
     renderWells(); renderStats(); renderMap();
@@ -252,16 +320,91 @@
 
   document.getElementById("meterForm").addEventListener("submit", e => {
     e.preventDefault();
-    const obj = formToObject(e.target, ["InputV", "OutputV", "Amperes", "Breaker"]);
+    const obj = formToObject(e.target, METER_NUMERIC);
     if (!obj.Serial) { toast("Meter serial number is required."); return; }
-    const exists = allMeters().some(m => m.Serial === obj.Serial);
+    const exists = effectiveMeters().some(m => m.Serial === obj.Serial);
     if (exists) { document.getElementById("meterFormMsg").textContent = "A meter with that serial already exists."; return; }
     addedMeters.push(obj);
-    safeSet(LS_METERS, addedMeters);
+    persistMeters();
     e.target.reset();
     document.getElementById("meterFormMsg").textContent = "";
     renderMeters(); renderStats();
     toast(`Meter ${obj.Serial} saved.`);
+  });
+
+  // ---------------- Edit modal ----------------
+  const editOverlay = document.getElementById("editModalOverlay");
+  const editFormGrid = document.getElementById("editFormGrid");
+  const editForm = document.getElementById("editForm");
+  let editContext = null; // { type: 'well'|'meter', key: ID or Serial, isAdded: bool }
+
+  function buildFieldHtml(f, value) {
+    const val = value === null || value === undefined ? "" : value;
+    if (f.type === "select") {
+      const opts = f.options.map(o => `<option ${norm(o) === norm(val) ? "selected" : ""}>${o}</option>`).join("");
+      return `<div class="field"><label>${f.label}</label><select name="${f.name}">${opts}</select></div>`;
+    }
+    return `<div class="field"><label>${f.label}</label>
+      <input type="${f.type}" ${f.type === "number" ? 'step="any"' : ""} name="${f.name}" value="${String(val).replace(/"/g, "&quot;")}"></div>`;
+  }
+
+  function openEditModal(type, key) {
+    const isWell = type === "well";
+    const fields = isWell ? WELL_FIELDS : METER_FIELDS;
+    const dataset = isWell ? effectiveWells() : effectiveMeters();
+    const matchKey = isWell ? "ID" : "Serial";
+    const record = dataset.find(r => String(r[matchKey]) === String(key));
+    if (!record) return;
+
+    const added = isWell ? isAddedWell(key) : isAddedMeter(key);
+    editContext = { type, key, isAdded: added };
+
+    document.getElementById("editModalTitle").textContent = isWell ? `Edit Well ${pad3(key)}` : `Edit Meter ${key}`;
+    document.getElementById("editModalNote").textContent = added
+      ? "This is a record you added — changes update it directly."
+      : "This is from the original spreadsheet — your changes are saved as an override in this browser, the original data.js stays untouched.";
+
+    editFormGrid.innerHTML = fields.map(f => buildFieldHtml(f, record[f.name])).join("");
+    editOverlay.classList.add("show");
+  }
+
+  function closeEditModal() {
+    editOverlay.classList.remove("show");
+    editContext = null;
+  }
+  document.getElementById("editModalClose").addEventListener("click", closeEditModal);
+  document.getElementById("editModalCancel").addEventListener("click", closeEditModal);
+  editOverlay.addEventListener("click", e => { if (e.target === editOverlay) closeEditModal(); });
+
+  editForm.addEventListener("submit", e => {
+    e.preventDefault();
+    if (!editContext) return;
+    const isWell = editContext.type === "well";
+    const numeric = isWell ? WELL_NUMERIC : METER_NUMERIC;
+    const updated = formToObject(editForm, numeric);
+
+    if (isWell) {
+      if (editContext.isAdded) {
+        const idx = addedWells.findIndex(w => String(w.ID) === String(editContext.key));
+        if (idx > -1) { addedWells[idx] = Object.assign({}, addedWells[idx], updated); persistWells(); }
+      } else {
+        wellEdits[String(editContext.key)] = updated;
+        persistWellEdits();
+      }
+      renderWells(); renderStats(); renderMap();
+      toast(`Well ${pad3(editContext.key)} updated.`);
+    } else {
+      if (editContext.isAdded) {
+        const idx = addedMeters.findIndex(m => m.Serial === editContext.key);
+        if (idx > -1) { addedMeters[idx] = Object.assign({}, addedMeters[idx], updated); persistMeters(); }
+      } else {
+        meterEdits[editContext.key] = updated;
+        persistMeterEdits();
+      }
+      renderMeters(); renderStats();
+      toast(`Meter ${editContext.key} updated.`);
+    }
+    closeEditModal();
   });
 
   // ---------------- CSV export ----------------
@@ -284,11 +427,11 @@
   }
 
   document.getElementById("exportWellsCsv").addEventListener("click", () => {
-    download("wells_export.csv", toCsv(allWells(),
+    download("wells_export.csv", toCsv(effectiveWells(),
       ["ID", "Lat", "Lng", "Status", "Rehab", "DistToMeter", "TotalDepth", "AmountWater", "DisconnectReason", "ConnectedMeter"]));
   });
   document.getElementById("exportMetersCsv").addEventListener("click", () => {
-    download("meters_export.csv", toCsv(allMeters(),
+    download("meters_export.csv", toCsv(effectiveMeters(),
       ["Serial", "Status", "InputV", "OutputV", "Amperes", "Breaker", "ConnectedWell", "DisconnectReason"]));
   });
 
