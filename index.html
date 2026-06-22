@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wells &amp; Meters Field Report</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+  :root{
+    --sand: #EFE6D4;
+    --sand-dark: #DCCDA8;
+    --ink: #232017;
+    --teal: #15433F;
+    --teal-light: #1F5C56;
+    --rust: #C2682B;
+    --sage: #557A4D;
+    --sage-bg: #E4ECDE;
+    --amber: #C7901A;
+    --amber-bg: #F6E9CD;
+    --line: #C9B98F;
+    --white: #FFFCF5;
+    --shadow: 0 1px 0 rgba(35,32,23,.06);
+  }
+
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Inter',sans-serif;background:var(--sand);color:var(--ink);}
+  h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ---------- Header ---------- */
+  header.top{
+    background:var(--teal);
+    color:var(--sand);
+    padding:28px clamp(16px,4vw,48px) 22px;
+    position:relative;
+    overflow:hidden;
+    border-bottom:4px solid var(--rust);
+  }
+  header.top::before{
+    content:"";
+    position:absolute; inset:0;
+    background-image:
+      repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 2px, transparent 2px 14px);
+    pointer-events:none;
+  }
+  .top-inner{position:relative; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:14px;}
+  .eyebrow{font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--rust); margin:0 0 6px;}
+  header.top h1{font-size:clamp(24px,3.4vw,34px); margin:0; font-weight:700; letter-spacing:-0.01em;}
+  header.top p.sub{margin:6px 0 0; color:#cfd9c8; font-size:14px; max-width:520px;}
+  .coords{font-family:'JetBrains Mono',monospace; font-size:12px; color:#9fb6a8; text-align:right;}
+
+  /* ---------- Nav ---------- */
+  nav.tabs{
+    display:flex; gap:2px; background:var(--teal-light);
+    padding:0 clamp(16px,4vw,48px); overflow-x:auto;
+  }
+  nav.tabs button{
+    appearance:none; border:none; background:transparent; color:#cfe0d4;
+    font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:14px;
+    padding:13px 18px; cursor:pointer; border-bottom:3px solid transparent;
+    white-space:nowrap; transition:.15s;
+  }
+  nav.tabs button:hover{ color:var(--white); }
+  nav.tabs button.active{ color:var(--white); border-bottom-color:var(--rust); background:rgba(0,0,0,.08);}
+
+  main{ max-width:1180px; margin:0 auto; padding:28px clamp(16px,4vw,40px) 70px; }
+  section.view{ display:none; }
+  section.view.active{ display:block; animation:fade .25s ease; }
+  @keyframes fade{ from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;} }
+
+  /* ---------- Stat cards ---------- */
+  .stat-row{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:22px;}
+  .stat-card{
+    background:var(--white); border:1px solid var(--line); border-radius:3px;
+    padding:16px 18px; box-shadow:var(--shadow); position:relative;
+  }
+  .stat-card .num{ font-family:'Space Grotesk',sans-serif; font-size:30px; font-weight:700; line-height:1; }
+  .stat-card .lbl{ font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#6b6555; margin-top:6px;}
+  .stat-card.good .num{ color:var(--sage); }
+  .stat-card.bad .num{ color:var(--rust); }
+  .stat-card.neutral .num{ color:var(--teal); }
+
+  .panel{
+    background:var(--white); border:1px solid var(--line); border-radius:3px;
+    padding:20px clamp(14px,3vw,26px); margin-bottom:22px; box-shadow:var(--shadow);
+  }
+  .panel h2{ margin:0 0 4px; font-size:18px; }
+  .panel .panel-note{ font-size:12.5px; color:#8a8267; margin:0 0 14px; }
+
+  #map{ height:420px; border-radius:3px; border:1px solid var(--line); }
+  .legend{ display:flex; gap:18px; margin-top:10px; font-size:12.5px; color:#5b5645; flex-wrap:wrap;}
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .dot{ width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+  /* ---------- Tables ---------- */
+  .toolbar{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
+  .toolbar input[type=text], .toolbar select{
+    font-family:'Inter',sans-serif; font-size:13.5px; padding:8px 10px;
+    border:1px solid var(--line); border-radius:3px; background:var(--white); color:var(--ink);
+  }
+  .toolbar input[type=text]{ min-width:200px; flex:1; }
+  .count-pill{ font-family:'JetBrains Mono',monospace; font-size:12px; background:var(--sand-dark); padding:6px 10px; border-radius:20px; color:var(--ink); }
+  .btn{
+    font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:13px;
+    border:1px solid var(--teal); background:var(--teal); color:var(--white);
+    padding:9px 16px; border-radius:3px; cursor:pointer; transition:.15s;
+  }
+  .btn:hover{ background:var(--teal-light); }
+  .btn.outline{ background:transparent; color:var(--teal); }
+  .btn.outline:hover{ background:rgba(21,67,63,.07); }
+  .btn.danger{ background:transparent; border-color:var(--rust); color:var(--rust); padding:5px 10px; font-size:12px;}
+  .btn.danger:hover{ background:var(--rust); color:var(--white); }
+  .btn.small{ padding:5px 10px; font-size:12px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  thead th{
+    text-align:left; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.05em;
+    text-transform:uppercase; color:#766f57; border-bottom:2px solid var(--ink);
+    padding:9px 8px; white-space:nowrap; position:sticky; top:0; background:var(--white);
+  }
+  tbody td{ padding:9px 8px; border-bottom:1px solid #ece3cb; vertical-align:middle; }
+  tbody tr:hover{ background:var(--amber-bg); }
+  .table-wrap{ overflow-x:auto; max-height:560px; overflow-y:auto; border:1px solid var(--line); border-radius:3px; }
+  .badge{ font-size:11.5px; font-weight:600; padding:3px 9px; border-radius:20px; display:inline-block; }
+  .badge.on{ background:var(--sage-bg); color:var(--sage); }
+  .badge.off{ background:#f6e0d6; color:var(--rust); }
+  .badge.amber{ background:var(--amber-bg); color:var(--amber); }
+  .new-row{ background:#fff7e0 !important; }
+  .muted{ color:#9a9377; }
+
+  /* ---------- Form ---------- */
+  .form-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+  .field label{ display:block; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#6b6555; margin-bottom:5px; font-weight:600;}
+  .field input, .field select{
+    width:100%; font-family:'Inter',sans-serif; font-size:14px; padding:9px 10px;
+    border:1px solid var(--line); border-radius:3px; background:var(--sand); color:var(--ink);
+  }
+  .type-switch{ display:flex; gap:8px; margin-bottom:18px; }
+  .type-switch button{
+    flex:1; padding:12px; border-radius:3px; border:1.5px solid var(--line); background:var(--white);
+    font-family:'Space Grotesk',sans-serif; font-weight:600; cursor:pointer; color:#7a7459;
+  }
+  .type-switch button.active{ border-color:var(--teal); background:var(--teal); color:var(--white); }
+  .form-actions{ margin-top:20px; display:flex; gap:10px; align-items:center; }
+  .toast{
+    position:fixed; bottom:24px; right:24px; background:var(--teal); color:var(--white);
+    padding:12px 20px; border-radius:3px; font-size:14px; box-shadow:0 6px 20px rgba(0,0,0,.2);
+    opacity:0; transform:translateY(10px); transition:.25s; pointer-events:none; z-index:999;
+  }
+  .toast.show{ opacity:1; transform:none; }
+
+  footer{ text-align:center; padding:20px; font-size:12px; color:#8a8267; }
+  a.export-link{ color:var(--teal); text-decoration:underline; cursor:pointer; }
+
+  @media (max-width:640px){
+    .top-inner{flex-direction:column; align-items:flex-start;}
+    .coords{text-align:left;}
+    #map{height:320px;}
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-inner">
+    <div>
+      <p class="eyebrow">Field Infrastructure Report</p>
+      <h1>Wells &amp; Electrical Meters</h1>
+      <p class="sub">Live register of well status, rehabilitation state, and connected electrical meters.</p>
+    </div>
+    <div class="coords mono" id="headerCoords">26.64&deg;N&nbsp;37.91&deg;E</div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-view="dashboard" class="active">Dashboard</button>
+  <button data-view="wells">Wells</button>
+  <button data-view="meters">Meters</button>
+  <button data-view="add">Add New</button>
+</nav>
+
+<main>
+
+  <!-- DASHBOARD -->
+  <section class="view active" id="view-dashboard">
+    <div class="stat-row" id="statRow"></div>
+
+    <div class="panel">
+      <h2>Well Locations</h2>
+      <p class="panel-note">Markers colored by well status. Click a marker for details.</p>
+      <div id="map"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#557A4D"></span> Active</span>
+        <span><span class="dot" style="background:#C2682B"></span> Non-Active</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- WELLS -->
+  <section class="view" id="view-wells">
+    <div class="panel">
+      <h2>Wells Register</h2>
+      <p class="panel-note">All recorded wells. Use filters to narrow the list, or add a record from the "Add New" tab.</p>
+      <div class="toolbar">
+        <input type="text" id="wellSearch" placeholder="Search by ID or connected meter…">
+        <select id="wellStatusFilter">
+          <option value="">All statuses</option>
+          <option>Active</option>
+          <option>Non-Active</option>
+        </select>
+        <select id="wellRehabFilter">
+          <option value="">All rehab states</option>
+          <option>Maintained</option>
+          <option>Not Maintained</option>
+        </select>
+        <span class="count-pill" id="wellCount"></span>
+        <button class="btn outline small" id="exportWellsCsv">Export CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Status</th><th>Rehab</th><th>Lat</th><th>Lng</th>
+              <th>Dist to Meter (m)</th><th>Depth (m)</th><th>Water (m)</th>
+              <th>Disconnect Reason</th><th>Connected Meter</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="wellsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- METERS -->
+  <section class="view" id="view-meters">
+    <div class="panel">
+      <h2>Electrical Meters Register</h2>
+      <p class="panel-note">All recorded electrical meters and the wells they serve.</p>
+      <div class="toolbar">
+        <input type="text" id="meterSearch" placeholder="Search by serial or connected well…">
+        <select id="meterStatusFilter">
+          <option value="">All statuses</option>
+          <option>Working</option>
+          <option>Not working</option>
+        </select>
+        <span class="count-pill" id="meterCount"></span>
+        <button class="btn outline small" id="exportMetersCsv">Export CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Serial Number</th><th>Status</th><th>Input V</th><th>Output V</th>
+              <th>Amperes</th><th>Breaker</th><th>Connected Well</th><th>Disconnect Reason</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="metersBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ADD NEW -->
+  <section class="view" id="view-add">
+    <div class="panel">
+      <h2>Add a New Record</h2>
+      <p class="panel-note">New records are saved in this browser (localStorage) so they're still here next time you open the site on this device/browser.</p>
+
+      <div class="type-switch">
+        <button data-type="well" class="active">+ New Well</button>
+        <button data-type="meter">+ New Meter</button>
+      </div>
+
+      <form id="wellForm" class="record-form">
+        <div class="form-grid">
+          <div class="field"><label>Well ID</label><input type="text" name="ID" placeholder="e.g. 208" required></div>
+          <div class="field"><label>Latitude</label><input type="number" step="any" name="Lat" placeholder="26.6xxxxx"></div>
+          <div class="field"><label>Longitude</label><input type="number" step="any" name="Lng" placeholder="37.9xxxxx"></div>
+          <div class="field"><label>Well Status</label>
+            <select name="Status"><option>Active</option><option>Non-Active</option></select>
+          </div>
+          <div class="field"><label>Rehabilitation Status</label>
+            <select name="Rehab"><option>Maintained</option><option>Not Maintained</option></select>
+          </div>
+          <div class="field"><label>Distance to Meter (m)</label><input type="number" step="any" name="DistToMeter"></div>
+          <div class="field"><label>Total Depth (m)</label><input type="number" step="any" name="TotalDepth"></div>
+          <div class="field"><label>Amount of Water (m)</label><input type="number" step="any" name="AmountWater"></div>
+          <div class="field"><label>Disconnect Reason</label><input type="text" name="DisconnectReason" placeholder="leave blank if active"></div>
+          <div class="field"><label>Connected Meter Serial</label><input type="text" name="ConnectedMeter"></div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn">Save Well</button>
+          <span class="muted" id="wellFormMsg"></span>
+        </div>
+      </form>
+
+      <form id="meterForm" class="record-form" style="display:none;">
+        <div class="form-grid">
+          <div class="field"><label>Meter Serial Number</label><input type="text" name="Serial" required></div>
+          <div class="field"><label>Status</label>
+            <select name="Status"><option>Working</option><option>Not working</option></select>
+          </div>
+          <div class="field"><label>Input Voltage</label><input type="number" step="any" name="InputV"></div>
+          <div class="field"><label>Output Voltage</label><input type="number" step="any" name="OutputV"></div>
+          <div class="field"><label>Amperes</label><input type="number" step="any" name="Amperes"></div>
+          <div class="field"><label>Breaker Capacity</label><input type="number" step="any" name="Breaker"></div>
+          <div class="field"><label>Connected Well No.</label><input type="text" name="ConnectedWell"></div>
+          <div class="field"><label>Disconnect Reason</label><input type="text" name="DisconnectReason" placeholder="leave blank if working"></div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn">Save Meter</button>
+          <span class="muted" id="meterFormMsg"></span>
+        </div>
+      </form>
+    </div>
+  </section>
+
+</main>
+
+<footer>Static field report &middot; data persists locally in your browser &middot; export anytime as backup</footer>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
